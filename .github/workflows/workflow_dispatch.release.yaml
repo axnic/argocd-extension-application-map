@@ -203,3 +203,65 @@ jobs:
             echo "Approve it (2FA required): \`npm stage list ${NAME}\` then \`npm stage approve <stage-id>\`,"
             echo "or use the *Staged Packages* tab on https://www.npmjs.com/package/${NAME}"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # version — commit the released version to package.json on the default branch (axnic-bot)
+  # ---------------------------------------------------------------------------
+  version:
+    name: 🏷️ Commit the version
+    needs: [prepare, npm]
+    # A prerelease (release candidate) never lands in package.json.
+    if: needs.prepare.outputs.prerelease != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # the push goes through the GitHub App token, not GITHUB_TOKEN
+
+    steps:
+      # The default branch is protected: only the axnic-bot app bypasses its ruleset.
+      - name: 🔎 Check the GitHub App credentials
+        env:
+          CI_APP_ID: ${{ secrets.CI_APP_ID }}
+          CI_APP_PRIVATE_KEY: ${{ secrets.CI_APP_PRIVATE_KEY }}
+        run: |
+          if [[ -z "$CI_APP_ID" || -z "$CI_APP_PRIVATE_KEY" ]]; then
+            echo "::error::CI_APP_ID / CI_APP_PRIVATE_KEY are not set: the version cannot be committed to the protected default branch. Install the axnic-bot GitHub App on this repository (or set npm_commit_version = false)."
+            exit 1
+          fi
+
+      - name: 🔑 Generate a GitHub App token
+        id: token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.CI_APP_ID }}
+          private-key: ${{ secrets.CI_APP_PRIVATE_KEY }}
+
+      - name: ⬇️ Checkout the default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          token: ${{ steps.token.outputs.token }}
+
+      - name: ✍️ Commit the version
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          MESSAGE_FORMAT: ":bookmark: (release): Bump the version to %s"
+          PACKAGE_DIR: .
+          BRANCH: main
+        run: |
+          cd "$PACKAGE_DIR"
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+          cd "$GITHUB_WORKSPACE"
+          if git diff --quiet; then
+            echo "::notice::package.json already says $VERSION - nothing to commit."
+            exit 0
+          fi
+          git config user.name "axnic-bot[bot]"
+          git config user.email "axnic-bot[bot]@users.noreply.github.com"
+          git commit --all --message "${MESSAGE_FORMAT//%s/$VERSION}"
+          # The branch may have moved since the checkout: replay the commit on top, a few times.
+          for attempt in 1 2 3; do
+            git push origin "HEAD:$BRANCH" && exit 0
+            git pull --rebase origin "$BRANCH"
+          done
+          echo "::error::Could not push the version commit to $BRANCH."
+          exit 1
