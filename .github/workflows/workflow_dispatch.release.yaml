@@ -152,8 +152,10 @@ jobs:
           cache: true
           cache_key: "mise-v1-{{platform}}-{{file_hash}}"
 
+      # `mise run ci:build` runs at the repository root; the package is in settings.npm_dir.
       # The tag is the source of truth for the version: package.json is not bumped by the release.
       - name: 🏷️ Set the package version
+        working-directory: .
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
         run: npm version "$VERSION" --no-git-tag-version --allow-same-version
@@ -166,6 +168,7 @@ jobs:
         run: npm install --global npm@^11.15.0
 
       - name: 🚀 Stage on npm (approval required)
+        working-directory: .
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
